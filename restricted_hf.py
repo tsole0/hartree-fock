@@ -26,21 +26,24 @@ class BasisSet:
     NOTE: At present, only STO-3G is implemented.
     """
 
-    _alpha_1g = np.array()
+    _basis_sets = {
+            'sto-3g': {
+                'fxn': lambda distance, orb_exponent: (2 * orb_exponent / np.pi)**(3/4) * np.exp(-orb_exponent*distance**2),
+                'alpha_1g': np.array([0.109818, 0.405771, 2.22766]),
+                'contraction_coefficients': np.array([0.444635, 0.535328, 0.154329]),
+                       }
+        }
 
     def __init__(self, basis_set) -> None:
-            basis_sets = {
-            'sto-3g': lambda distance, orb_exponent: (2 * orb_exponent / np.pi)**(3/4) * np.exp(-orb_exponent*distance**2)
-        }
-            if basis_set not in basis_sets.keys:
+            if basis_set not in self._basis_sets.keys():
                 raise ValueError("Please provide a valid basis set:")
             else:
-                self.basis_fxn = basis_sets[basis_set]
+                self.basis_fxn = self._basis_sets[basis_set]
     
-    @staticmethod
-    def generate_alpha(slater_gamma):
+    def generate_alpha(self, slater_gamma: np.floating):
         """
         Generate a Gaussian alpha coefficient from a corresponding Slater gamma coefficient,
         for use in STO-NG method.
         """
-        return slater_gamma
+        alphas = self.basis_fxn['alpha_1g']
+        return alphas * slater_gamma**2
