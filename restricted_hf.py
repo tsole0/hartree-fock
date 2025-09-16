@@ -24,6 +24,9 @@ class BasisSet:
     """
     Defines the basis set to be used in Hartree-Fock calculations.
     NOTE: At present, only STO-3G is implemented.
+    :param basis_set: Name of basis set
+    :param sto_gamma: The Slater-type orbital (STO) gamma value, if required by the choice
+    of basis set
     """
 
     _basis_sets = {
@@ -34,13 +37,13 @@ class BasisSet:
                        }
         }
 
-    def __init__(self, basis_set) -> None:
+    def __init__(self, basis_set, sto_gamma=None) -> None:
             if basis_set not in self._basis_sets.keys():
                 raise ValueError("Please provide a valid basis set:")
             else:
                 self.basis_fxn = self._basis_sets[basis_set]
     
-    def generate_alpha(self, slater_gamma: np.floating):
+    def generate_alpha(self, slater_gamma: np.floating) -> np.floating:
         """
         Generate a Gaussian alpha coefficient from a corresponding Slater gamma coefficient,
         for use in STO-NG method.
