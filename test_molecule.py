@@ -7,7 +7,7 @@ from restricted_hf import RHF
 
 # Define a molecule and run to see convergence energy (density matrix will be printed)
 #Example: H2O
-mole = gto.M(atom='H 0 0 0; H 0 2.5 0; O 0.5 1.25 0', basis='sto-3g')
+mole = gto.M(atom='O 0 0 0; H 0.758602 0 0.504284; H -0.758602 0 0.504284', basis='sto-3g')
 H2 = RHF(mole)
 H2.run()
 

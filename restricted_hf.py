@@ -65,7 +65,7 @@ class RHF:
             # Combine to yield Fock matrix F
             F = self.h1 + G
             P = self.generate_density(F)
-            energy = np.sum(P * (self.h1 + 0.5 * F))
+            energy = np.sum(P * (self.h1 + 0.5 * G))
             self.energy_output.append(energy)
 
             # Check for convergence based on energy
