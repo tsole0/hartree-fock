@@ -1,146 +1,124 @@
-# Math imports
-import scipy
+# Math/science imports
 import numpy as np
 import numpy.typing as npt
+from pyscf import gto
 
-#Utility imports
 from typing import Union
-from functools import partial
 
-class Coord:
+class RHF:
     """
-    Class holding coordinates in 3-dimensional space and coordinate operations
+    Implements restricted Hartree-Fock
     """
-    def __init__(self, x: int, y: int, z: int) -> None:
-        self.pos = np.array([x, y, z])
-        self.x = x
-        self.y = y
-        self.z = z
 
-    def __repr__(self) -> str:
-        return f"Coord ({', '.join(str(element) for element in self.pos)})"
-    
-    def __sub__(self, other: "Coord") -> "Coord":
-        if not isinstance(other, Coord):
-            return NotImplemented
-        return Coord(self.x - other.x, self.y - other.y, self.z - other.z)
-    
-    def __abs__(self) -> np.float64:
-        return np.sqrt(self.x**2 + self.y**2 + self.z**2)
-    
-    def __pow__(self, power: int) -> "Coord":
-        return Coord(self.x**power, self.y**power, self.z**power)
+    def __init__(self, mol: gto.M, conv: float=1e-10, iter: int=1000) -> None:
+        """
+        :param mol: Input molecule on which to run RHF
+        :param conv: Tolerance at which a solution is considered "converged." Default 1e-8 (Hartrees).
+        :param iter: Max number of iterations. Default 1000.
+        """
+        self.conv = conv
+        self.iter = iter
+
+        # Generate invariants
+        self.h1 = mol.intor('int1e_kin') + mol.intor('int1e_nuc')
+        self.h2 = mol.intor('int2e') # 2 e- integrals
+
+        S = mol.intor('int1e_ovlp')
+        self.n_elect = mol.nelectron
+        self.n_occ = self.n_elect // 2
+        self.n_basis = mol.nao_nr()
+        self.X = self.orthogonalize_matrix(S)
+
+        self.energy_output = [] # For graphing energy evolution of system
 
     @property
-    def position(self) -> npt.NDArray[np.floating]:
-        return self._pos
+    def P(self) -> np.ndarray:
+        """
+        Final e- density (P) matrix
+        """
+        if not hasattr(self, "_P") or self._P is None:
+            raise AttributeError("Density matrix P has not been generated. Use .run() first")
+        return self._P
     
-    @position.setter
-    def position(self, position: npt.NDArray[np.floating]) -> None:
-        if position.shape != (3,):
-            raise ValueError(f"Position must be in form (3,), got {position.shape}")
-        self._pos = position
+    @P.setter
+    def P(self, mat: np.ndarray) -> None:
+        self._P = mat
 
-class BasisSet:
-    """
-    Defines the basis set to be used in Hartree-Fock calculations.
-    NOTE: At present, only STO-3G is implemented.
-    :param basis_set: Name of basis set
-    :param sto_zeta: The Slater-type orbital (STO) zeta value, if required by the choice
-    of basis set
-    """
+    def run(self) -> None:
+        """
+        Begin the SCF procedure.
+        """
+        # Clear Energy output for graphing
+        self.energy_output = []
 
-    _basis_sets = {
-            'sto-3g': {
-                'fxn': lambda r, orb_exponent, center: (2 * orb_exponent / np.pi)**(3/4) * np.exp(-orb_exponent*abs(r - center)**2),
-                'alpha_1z': np.array([0.109818, 0.405771, 2.22766]),
-                'contraction_coefficients': np.array([0.444635, 0.535328, 0.154329]),
-                       }
-        }
+        # Get initial guess
+        P_guess = self.inital_guess()
+        G = np.zeros((self.n_basis, self.n_basis))
+        energy_guess = np.sum(P_guess * self.h1) # Guess for energy of system, used for convergence test
+        
+        for i in range(self.iter):
+            # Generate coloumb and exchange terms:
+            for mu in range(self.n_basis):
+                for nu in range(self.n_basis):
+                    G[mu, nu] = np.sum(P_guess * (self.h2[mu,nu,:,:] - 0.5 * self.h2[mu,:,:,nu]))
 
-    def __init__(self, basis_set, sto_zeta=None) -> None:
-            if basis_set not in self._basis_sets.keys():
-                raise ValueError("Please provide a valid basis set:")
-            else:
-                self.basis_category = self._basis_sets[basis_set]
+            # Combine to yield Fock matrix F
+            F = self.h1 + G
+            P = self.generate_density(F)
+            energy = np.sum(P * (self.h1 + 0.5 * F))
+            self.energy_output.append(energy)
+
+            # Check for convergence based on energy
+            if np.allclose(energy, energy_guess, atol=self.conv):
+                print(f"Converged in {i} iterations.")
+                self.P = P
+                return
+            energy_guess = energy
+            P_guess = P.copy()
+        
+        print(f"SCF did not converge within {self.conv} after {self.iter} iterations. Reporting last value...")
+        self.P = P_guess
+
+    def inital_guess(self) -> np.ndarray:
+        """
+        Generate an intial guess of the P charge density matrix based on the core-shell Hamiltonian (h1)
+        Should be accurate enough guess for simple systems for the SCF to converge.
+        """
+        return self.generate_density(self.h1)
+
+    def generate_density(self, P_guess: np.ndarray) -> np.ndarray:
+        """
+        Generate the density matrix P from a transformed MO coefficient matrix
+
+        :param P_guess: Guess of P matrix that will be iterated (Normally Fock matrix)
+        """
+        P_guess_prime = self.transform(P_guess) # Translate into orthogonal space
+        _, C_prime = np.linalg.eigh(P_guess_prime) # Calculate eigenvectors
+        C_prime_occ = C_prime[:, :self.n_occ] # Find filled orbitals (eigenvecs)
+        C = self.X @ C_prime_occ #Translate back into AO space
+        P = 2 * (C @ C.T) # Calculate density matrix
+
+        return P
+    
+    def transform(self, matrix: np.ndarray) -> np.ndarray:
+        """
+        Transform input matrix by the transformation matrix X.
+        """
+        return self.X.T @ matrix @ self.X
     
     @staticmethod
-    def generate_alpha(alpha_1z: np.floating, sto_zeta: np.floating) -> np.floating:
+    def orthogonalize_matrix(mat: np.ndarray) -> np.ndarray:
         """
-        Generate a Gaussian alpha coefficient from a corresponding Slater zeta coefficient,
-        for use in STO-NG method.
+        Orthogonalize matrix using symmetrical orthogonalization:
+        X = U * s^(-1/2) * U^T
         """
-        return alpha_1z * sto_zeta**2
-
-class NucConfig:
-    """
-    Defines nuclear configuration (position), charge, and calculates invariants based on this (core-shell Hamiltonian)
-    :param: 
-    """
-    def __init__(self, geometry: list[tuple[int, Coord]], n_elec: int, basis: str) -> None:
-        self.n_elec = n_elec
-        self.geometry = geometry
-        self.basis = BasisSet(basis)
-
-        # Generate basis functions
-        self.basis_fxns = [None] * len(geometry) # Probably a better way to do this, and doesn't account for larger basis sets
-        for n in range(len(self.basis_fxns)):
-            
-        #Calculate core-shell Hamiltonian
-        self.core_shell_mat = self.core_shell()
-
-    @property
-    def n_elec(self) -> int:
-        return self._n_elec
-
-    @n_elec.setter
-    def n_elec(self, n_elec) -> None:
-        if n_elec < 0:
-            raise ValueError(f"Number of electrons cannot be negative. Provided {n_elec}.")
-        self._n_elec = n_elec
-    
-    def core_shell(self) -> npt.NDArray[np.float64]:
-        """
-        Calculate the core-shell Hamiltonian
-        """
-        #Initialize matrices
-        n_basis = len(self.geometry) # Probably a better way to do this, and doesn't account for larger basis sets
-        self.kinetic_mat = np.zeros((n_basis, n_basis), dtype=np.float64)
-        self.nuclear_attraction_mat = np.zeros((n_basis, n_basis), dtype=np.float64)
-
-        core_shell_mat = self.kinetic_mat + self.nuclear_attraction_mat # Temporary method to combine?
+        eigvals, eigvecs = np.linalg.eigh(mat)
+        s_inv_sqrt = np.diag(1.0 / np.sqrt(eigvals))
+        X = eigvecs @ s_inv_sqrt @ eigvecs.T
         
-        return core_shell_mat
-    
-    def eval_nuclear_attraction(self):
-        """
-        Calculate nuclear attraction matrix
-        """
-        pass
-
-    class BasisFxn:
-        """
-        class that holds coefficients, functions, etc. for a single basis function
-        """
-
-        def __init__(self, basis_set: "BasisSet", nuc_charge: int) -> None:
-            sto_zeta = {
-                # Nuclear charge : slater zeta value
-                # TODO: Fine-grained control over zeta value--pass in as param
-                1: np.float64(1.24)
-            }
-            self.basis_fxn = basis_set.basis_category['fxn']
-
-            # Transform the alpha values for zeta=1 into atom-specific values
-            alpha_1z = basis_set.basis_category['alpha_1z']
-            self.alphas = np.array(
-                list(
-                    map(
-                        BasisSet.generate_alpha,
-                        alpha_1z,
-                        [sto_zeta[nuc_charge]] * len(alpha_1z)
-                    )
-                )
-            )
-            self.contraction_coeff = basis_set.basis_category['contraction_coeff']
-
+        # Verify orthogonality:
+        if not np.allclose(X.T @ mat @ X, np.eye(mat.shape[0]), atol=1e-10):
+            # Should be very close to identity matrix. If not, something went wrong.
+            raise ValueError('Orthogonalization failed.')
+        
+        return X
